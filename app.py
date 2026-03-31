@@ -228,6 +228,9 @@ if not st.session_state.auth_verified:
 
     st.stop()
 
+# Shorthand for the signed-in user's email — passed to every storage call
+OWNER = st.session_state.auth_email
+
 # ── Load API keys from st.secrets ────────────────────────────────────────────
 try:
     TWITTER_BEARER = st.secrets["TWITTER_BEARER_TOKEN"]
@@ -282,14 +285,14 @@ with st.sidebar:
     st.divider()
 
     # Project selector
-    projects = get_projects()
+    projects = get_projects(OWNER)
     project_names = [p["name"] for p in projects] + ["+ New Project"]
     selected_project = st.selectbox("Project", project_names)
 
     if selected_project == "+ New Project":
         new_name = st.text_input("Project name")
         if st.button("Create") and new_name:
-            save_project({"name": new_name, "keywords": [], "handles": [], "categories": []})
+            save_project({"name": new_name, "keywords": [], "handles": [], "categories": []}, OWNER)
             st.rerun()
     else:
         st.session_state["active_project"] = selected_project
@@ -301,7 +304,7 @@ if not active:
     st.info("👈 Create or select a project in the sidebar to get started.")
     st.stop()
 
-config = load_project_config(active)
+config = load_project_config(active, OWNER)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_config, tab_collect, tab_analyze, tab_dashboard, tab_export = st.tabs(
@@ -408,7 +411,7 @@ If a tweet doesn't clearly fit any category, Claude will assign it **Other**.
             "handles": [h.strip() for h in handles_raw.splitlines() if h.strip()],
             "categories": [c for c in cats if c["name"]],
         }
-        save_project(updated)
+        save_project(updated, OWNER)
         st.session_state["categories_state"] = updated["categories"]
         config = updated
         st.success("Configuration saved!")
@@ -574,7 +577,7 @@ If the rate limit is hit mid-fetch, the tool will **stop and save whatever it co
                     api_response_box.warning("**API response: 200 OK** — Query succeeded but returned no results. Try broadening your keywords.")
 
                 if tweets:
-                    save_tweets(active, tweets)
+                    save_tweets(active, OWNER, tweets)
                     if not api_error:
                         status.success(f"✅ Fetched and saved **{len(tweets)} tweets**.")
                     else:
@@ -634,7 +637,7 @@ At roughly 50 tokens per tweet (input + output), 1,000 tweets costs approximatel
 
     api_key = ANTHROPIC_KEY
 
-    df_raw = load_tweets(active)
+    df_raw = load_tweets(active, OWNER)
     if df_raw.empty:
         st.info("No tweets collected yet. Go to the Collect tab first.")
         st.stop()
@@ -684,7 +687,7 @@ At roughly 50 tokens per tweet (input + output), 1,000 tweets costs approximatel
                 progress.progress((idx + 1) / len(batches))
 
             if results:
-                save_tweets(active, results, update=True)
+                save_tweets(active, OWNER, results, update=True)
                 if failed_batches:
                     status.warning(f"⚠️ Partial complete — {len(results)} tweets saved. Batches {failed_batches} failed. Re-run to retry failed batches.")
                 else:
@@ -716,7 +719,7 @@ The 5 highest-scoring positive and 5 lowest-scoring negative tweets, surfaced au
 > 💡 **Tip:** Use the category filter to focus on a specific topic — e.g. filter to *Biscus/Scandal-Related* only to see how that conversation breaks down in isolation.
         """)
 
-    df = load_tweets(active)
+    df = load_tweets(active, OWNER)
     if df.empty or "sentiment" not in df.columns or df["sentiment"].isna().all():
         st.info("No analyzed data yet. Run analysis first.")
         st.stop()
@@ -928,7 +931,7 @@ Download the full tweet dataset for this project — including all raw tweet dat
 > 💡 **Tip:** To create a filtered export, use the Dashboard filters first to identify the subset you want, then come back here — or filter the downloaded CSV/Excel manually using your preferred tool.
         """)
 
-    df_exp = load_tweets(active)
+    df_exp = load_tweets(active, OWNER)
     if df_exp.empty:
         st.info("No data to export yet.")
         st.stop()
