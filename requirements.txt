@@ -1,0 +1,18 @@
+streamlit>=1.35.0
+tweepy>=4.14.0
+anthropic>=0.28.0
+pandas>=2.0.0
+plotly>=5.18.0
+wordcloud>=1.9.3
+matplotlib>=3.7.0
+openpyxl>=3.1.0
+boto3>=1.34.0
+extra-streamlit-components>=0.1.60
+
+AWS_ACCESS_KEY_ID     = "AKIA6MYNKSLTM2N3CA6Z"
+AWS_SECRET_ACCESS_KEY = "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"
+AWS_SES_REGION        = "us-east-1"
+EMAIL_FROM            = "streamlit_otp@segaamerica.com"
+
+# Cookie signing
+COOKIE_SIGNING_KEY = "097f22301f96c93b553479cd775ed9d0b0af688a56b6f2e4916212e71cd87173"
