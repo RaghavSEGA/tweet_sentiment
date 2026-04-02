@@ -284,23 +284,30 @@ with st.sidebar:
 
     st.divider()
 
-    # Project selector
+    # Project selector — persisted in URL so it survives refresh
     projects = get_projects(OWNER)
     project_names = [p["name"] for p in projects] + ["+ New Project"]
-    selected_project = st.selectbox("Project", project_names)
+
+    # Read the project from the URL if present and valid
+    _qp = st.query_params.get("project", "")
+    _default_idx = project_names.index(_qp) if _qp in project_names else 0
+
+    selected_project = st.selectbox("Project", project_names, index=_default_idx)
 
     if selected_project == "+ New Project":
         new_name = st.text_input("Project name")
         if st.button("Create") and new_name:
             save_project({"name": new_name, "keywords": [], "handles": [], "categories": []}, OWNER)
+            st.query_params["project"] = new_name
             st.rerun()
     else:
         st.session_state["active_project"] = selected_project
+        st.query_params["project"] = selected_project
 
 # ── Load active project ───────────────────────────────────────────────────────
-active = st.session_state.get("active_project")
+active = st.session_state.get("active_project") or st.query_params.get("project", "")
 
-if not active:
+if not active or active not in [p["name"] for p in get_projects(OWNER)]:
     st.info("👈 Create or select a project in the sidebar to get started.")
     st.stop()
 
