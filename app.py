@@ -307,8 +307,8 @@ if not active:
 config = load_project_config(active, OWNER)
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_config, tab_collect, tab_analyze, tab_dashboard, tab_export = st.tabs(
-    ["⚙️ Configure", "📥 Collect", "🤖 Analyze", "📊 Dashboard", "💾 Export"]
+tab_config, tab_collect, tab_analyze, tab_dashboard, tab_export, tab_report = st.tabs(
+    ["⚙️ Configure", "📥 Collect", "🤖 Analyze", "📊 Dashboard", "💾 Export", "📝 Report & Chat"]
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -948,3 +948,238 @@ Download the full tweet dataset for this project — including all raw tweet dat
         st.download_button("⬇️ Download Excel", excel_buf.getvalue(),
                            f"{active}_tweets.xlsx",
                            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — REPORT & CHAT
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_report:
+    st.header(f"Report & Chat: {active}")
+    with st.expander("ℹ️ About this tab", expanded=False):
+        st.markdown("""
+**Generate Report** — Claude reads all your analysed tweets and writes a structured
+executive report covering sentiment trends, top issues, standout praise, and
+category breakdowns.
+
+**Chat** — Ask follow-up questions about the data. Claude has the full dataset
+in context so you can drill into specifics: *"What are the top complaints about
+the tutorial?"*, *"Summarise negative tweets from influencers"*, etc.
+
+> The dataset is passed in full on every message, so answers are grounded in
+> your actual tweets — not generic knowledge.
+        """)
+
+    df_chat = load_tweets(active, OWNER)
+
+    if df_chat.empty or df_chat["sentiment"].isna().all():
+        st.info("No analysed tweets yet. Run the Analyze tab first.")
+        st.stop()
+
+    # ── Build a compact dataset summary to pass as context ──────────────────
+    def _build_context(df: "pd.DataFrame", config: dict) -> str:
+        total      = len(df)
+        analysed   = df["sentiment"].notna().sum()
+        pos        = (df["sentiment"] == "positive").sum()
+        neg        = (df["sentiment"] == "negative").sum()
+        neu        = (df["sentiment"] == "neutral").sum()
+        avg_score  = df["score"].mean() if "score" in df.columns else None
+        categories = df["category"].value_counts().to_dict() if "category" in df.columns else {}
+
+        # Top 40 tweets by engagement (like + retweet) for richness
+        df_sorted = df.copy()
+        df_sorted["engagement"] = df_sorted.get("like_count", 0) + df_sorted.get("retweet_count", 0)
+        top_tweets = df_sorted.nlargest(40, "engagement")[
+            ["username", "text", "sentiment", "category", "score", "reasoning",
+             "like_count", "retweet_count"]
+        ].to_dict("records")
+
+        # Random sample of 60 more for breadth
+        rest = df_sorted.drop(df_sorted.nlargest(40, "engagement").index)
+        sample = rest.sample(min(60, len(rest)), random_state=42) if len(rest) else rest
+        sample_tweets = sample[
+            ["username", "text", "sentiment", "category", "score", "reasoning"]
+        ].to_dict("records")
+
+        project_name = active
+        keywords     = config.get("keywords", [])
+        handles      = config.get("handles", [])
+        cat_defs     = config.get("categories", [])
+
+        lines = [
+            f"PROJECT: {project_name}",
+            f"SEARCH KEYWORDS: {', '.join(keywords)}",
+            f"MONITORED HANDLES: {', '.join(handles)}",
+            "",
+            "CUSTOM CATEGORIES:",
+        ]
+        for c in cat_defs:
+            lines.append(f"  - {c['name']}: {c['description']}")
+        lines += [
+            "",
+            f"TOTAL TWEETS: {total}  |  ANALYSED: {analysed}",
+            f"SENTIMENT BREAKDOWN — Positive: {pos} ({pos/analysed*100:.1f}%)  "
+            f"Negative: {neg} ({neg/analysed*100:.1f}%)  "
+            f"Neutral: {neu} ({neu/analysed*100:.1f}%)",
+        ]
+        if avg_score is not None:
+            lines.append(f"AVERAGE SENTIMENT SCORE: {avg_score:.3f}  (range −1.0 to +1.0)")
+        lines += ["", "CATEGORY COUNTS:"]
+        for cat, cnt in categories.items():
+            lines.append(f"  {cat}: {cnt}")
+        lines += ["", "TOP 40 TWEETS BY ENGAGEMENT:"]
+        for t in top_tweets:
+            lines.append(
+                f"  [@{t.get('username','?')}] [{t.get('sentiment','?').upper()}] "
+                f"[{t.get('category','?')}] score={t.get('score','?')}  "
+                f"❤️{t.get('like_count',0)} 🔁{t.get('retweet_count',0)}\n"
+                f"  \"{t.get('text','')}\"\n"
+                f"  → {t.get('reasoning','')}"
+            )
+        lines += ["", "RANDOM SAMPLE (60 additional tweets):"]
+        for t in sample_tweets:
+            lines.append(
+                f"  [@{t.get('username','?')}] [{t.get('sentiment','?').upper()}] "
+                f"[{t.get('category','?')}] score={t.get('score','?')}\n"
+                f"  \"{t.get('text','')}\""
+            )
+        return "\n".join(lines)
+
+    SYSTEM_PROMPT = (
+        "You are a senior social media analyst embedded in SEGA America's insights team. "
+        "You have access to a structured dataset of tweets collected and analysed for a specific "
+        "game or project. All sentiment classifications and category labels were produced by an "
+        "AI classifier — treat them as high-quality but not infallible. "
+        "Answer questions analytically, cite specific tweets when relevant, and keep your tone "
+        "professional but approachable. When generating a report, structure it with clear sections "
+        "and use markdown formatting."
+    )
+
+    REPORT_PROMPT = (
+        "Generate a comprehensive executive report for the following dataset. "
+        "Structure it with these sections:\n"
+        "1. **Executive Summary** — 3–5 sentence overview of overall sentiment and key findings\n"
+        "2. **Sentiment Overview** — breakdown of positive/negative/neutral with notable trends\n"
+        "3. **Category Analysis** — what each category reveals; which are driving positive vs negative sentiment\n"
+        "4. **Top Praise** — 3–5 specific things players/fans love most, with example tweets\n"
+        "5. **Top Concerns** — 3–5 specific issues or criticisms, with example tweets\n"
+        "6. **Influencer & High-Engagement Signals** — what high-engagement tweets reveal\n"
+        "7. **Recommendations** — 3–5 actionable suggestions for the team\n\n"
+        "Be specific and grounded in the data. Quote actual tweets where helpful."
+    )
+
+    # ── Session state for chat ───────────────────────────────────────────────
+    chat_key = f"chat_{active}"
+    if chat_key not in st.session_state:
+        st.session_state[chat_key] = []   # list of {"role": ..., "content": ...}
+
+    context = _build_context(df_chat, config)
+
+    # ── Generate Report button ───────────────────────────────────────────────
+    col_btn, col_clear = st.columns([3, 1])
+    with col_btn:
+        gen_report = st.button("📝 Generate Report", type="primary", use_container_width=True)
+    with col_clear:
+        if st.button("🗑️ Clear chat", use_container_width=True):
+            st.session_state[chat_key] = []
+            st.rerun()
+
+    if gen_report:
+        with st.spinner("Claude is reading your data and writing the report…"):
+            import anthropic
+            client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"Here is the tweet dataset:\n\n<dataset>\n{context}\n</dataset>\n\n"
+                        f"{REPORT_PROMPT}"
+                    )
+                }
+            ]
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=messages,
+            )
+            report_text = response.content[0].text
+            # Save both turns to chat history so follow-ups have full context
+            st.session_state[chat_key].append({
+                "role": "user",
+                "content": (
+                    f"<dataset>\n{context}\n</dataset>\n\n{REPORT_PROMPT}"
+                )
+            })
+            st.session_state[chat_key].append({
+                "role": "assistant",
+                "content": report_text,
+            })
+            st.rerun()
+
+    # ── Render chat history ──────────────────────────────────────────────────
+    if st.session_state[chat_key]:
+        for msg in st.session_state[chat_key]:
+            role = msg["role"]
+            # Don't render the raw dataset blob — show a tidy label instead
+            content = msg["content"]
+            if role == "user" and content.startswith("<dataset>"):
+                # Strip the dataset preamble for display; show only the question part
+                parts = content.split("</dataset>\n\n", 1)
+                display = parts[1] if len(parts) > 1 else content
+                if display == REPORT_PROMPT:
+                    display = "*(Generated report from full dataset)*"
+            else:
+                display = content
+
+            with st.chat_message(role):
+                st.markdown(display)
+
+        # ── Download report button (shown when there's content) ─────────────
+        last_assistant = next(
+            (m["content"] for m in reversed(st.session_state[chat_key]) if m["role"] == "assistant"),
+            None
+        )
+        if last_assistant:
+            st.download_button(
+                "⬇️ Download latest response as Markdown",
+                last_assistant.encode("utf-8"),
+                file_name=f"{active}_report.md",
+                mime="text/markdown",
+            )
+
+    else:
+        st.info("Click **Generate Report** for a full analysis, or type a question below to ask about your data directly.")
+
+    st.divider()
+
+    # ── Chat input ───────────────────────────────────────────────────────────
+    user_input = st.chat_input("Ask anything about your tweet data…")
+
+    if user_input:
+        # If no prior history, inject the dataset as the first user message silently
+        if not st.session_state[chat_key]:
+            st.session_state[chat_key].append({
+                "role": "user",
+                "content": f"Here is the tweet dataset for reference:\n\n<dataset>\n{context}\n</dataset>\n\nAcknowledge briefly that you have the data, then answer: {user_input}"
+            })
+        else:
+            st.session_state[chat_key].append({
+                "role": "user",
+                "content": user_input,
+            })
+
+        with st.spinner("Thinking…"):
+            import anthropic
+            client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+            response = client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=2048,
+                system=SYSTEM_PROMPT,
+                messages=st.session_state[chat_key],
+            )
+            reply = response.content[0].text
+
+        st.session_state[chat_key].append({
+            "role": "assistant",
+            "content": reply,
+        })
+        st.rerun()
