@@ -1092,7 +1092,11 @@ the tutorial?"*, *"Summarise negative tweets from influencers"*, etc.
     if gen_report:
         with st.spinner("Claude is reading your data and writing the report…"):
             import anthropic
-            client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+            client = anthropic.AnthropicBedrock(
+    aws_access_key   = st.secrets.get("AWS_ACCESS_KEY_ID_API", ""),
+    aws_secret_key   = st.secrets.get("AWS_SECRET_ACCESS_KEY_API", ""),
+    aws_region       = st.secrets.get("AWS_BEDROCK_REGION", "us-east-1"),
+)
             messages = [
                 {
                     "role": "user",
@@ -1103,7 +1107,7 @@ the tutorial?"*, *"Summarise negative tweets from influencers"*, etc.
                 }
             ]
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="us.anthropic.claude-sonnet-4-6",
                 max_tokens=4096,
                 system=SYSTEM_PROMPT,
                 messages=messages,
@@ -1176,9 +1180,13 @@ the tutorial?"*, *"Summarise negative tweets from influencers"*, etc.
 
         with st.spinner("Thinking…"):
             import anthropic
-            client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+            client = anthropic.AnthropicBedrock(
+    aws_access_key   = st.secrets.get("AWS_ACCESS_KEY_ID_API", ""),
+    aws_secret_key   = st.secrets.get("AWS_SECRET_ACCESS_KEY_API", ""),
+    aws_region       = st.secrets.get("AWS_BEDROCK_REGION", "us-east-1"),
+)
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="us.anthropic.claude-sonnet-4-6",
                 max_tokens=2048,
                 system=SYSTEM_PROMPT,
                 messages=st.session_state[chat_key],
