@@ -26,9 +26,12 @@ def _get_conn():
     if not url:
         raise RuntimeError(
             "DATABASE_URL not set in secrets.toml. "
-            "Add: DATABASE_URL = \"postgresql://user:pass@host:5432/db\""
+            "Add: DATABASE_URL = \"postgresql://user:pass@host:6543/db\""
         )
-    conn = psycopg2.connect(url, sslmode="require")
+    conn = psycopg2.connect(url, sslmode="require", options="-c statement_timeout=30000")
+    conn.autocommit = False
+    # Required for Supabase transaction-mode pooler (port 6543)
+    psycopg2.extras.register_default_jsonb(conn)
     try:
         yield conn
         conn.commit()
