@@ -49,10 +49,10 @@ h1,h2,h3,h4,h5,h6 { color: var(--text) !important; }
 """, unsafe_allow_html=True)
 
 # ── OTP Auth helpers ──────────────────────────────────────────────────────────
-ALLOWED_DOMAIN     = "@segaamerica.com"
-OTP_EXPIRY_SECS    = 600
-COOKIE_EXPIRY_DAYS = 7
-COOKIE_NAME        = "sentiment_tool_auth"
+ALLOWED_DOMAIN   = "@segaamerica.com"
+OTP_EXPIRY_SECS  = 600   # 10 minutes
+TOKEN_EXPIRY_DAYS = 1    # 1-day login token in URL
+TOOL_NAME        = "Tweet Sentiment Tool"
 
 def _send_otp(email: str, code: str) -> bool:
     try:
@@ -68,7 +68,7 @@ def _send_otp(email: str, code: str) -> bool:
             Source=st.secrets.get("EMAIL_FROM", "noreply@segaamerica.com"),
             Destination={"ToAddresses": [email]},
             Message={
-                "Subject": {"Data": "Tweet Sentiment Tool — Your verification code", "Charset": "UTF-8"},
+                "Subject": {"Data": f"{TOOL_NAME} — Your verification code", "Charset": "UTF-8"},
                 "Body": {
                     "Text": {
                         "Data": f"Your verification code is: {code}\n\nExpires in 10 minutes.",
@@ -78,7 +78,7 @@ def _send_otp(email: str, code: str) -> bool:
                         "Data": f"""
                         <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:32px 24px;">
                           <div style="font-size:22px;font-weight:900;letter-spacing:0.1em;color:#4080ff;margin-bottom:4px;">SEGA</div>
-                          <div style="font-size:14px;color:#444;margin-bottom:28px;">Tweet Sentiment Tool</div>
+                          <div style="font-size:14px;color:#444;margin-bottom:28px;">{TOOL_NAME}</div>
                           <div style="font-size:14px;color:#222;margin-bottom:16px;">Your verification code is:</div>
                           <div style="font-size:42px;font-weight:900;letter-spacing:0.18em;color:#1a1a2e;
                                       background:#f0f4ff;border-radius:8px;padding:18px 24px;
@@ -98,19 +98,21 @@ def _send_otp(email: str, code: str) -> bool:
         st.error(f"Failed to send email: {e}")
         return False
 
-def _sign_cookie(email: str) -> str:
-    secret = st.secrets.get("COOKIE_SIGNING_KEY", "fallback-change-this")
-    expiry = int(time.time()) + (COOKIE_EXPIRY_DAYS * 86400)
+def _make_token(email: str) -> str:
+    """Create a signed URL token: base64(email|expiry|hmac). Expires in TOKEN_EXPIRY_DAYS."""
+    secret  = st.secrets.get("COOKIE_SIGNING_KEY", "fallback-change-this")
+    expiry  = int(time.time()) + (TOKEN_EXPIRY_DAYS * 86400)
     payload = f"{email}|{expiry}"
-    sig = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    sig     = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(f"{payload}|{sig}".encode()).decode()
 
-def _verify_cookie(token: str):
+def _verify_token(token: str):
+    """Verify signed URL token. Returns email if valid, None otherwise."""
     try:
-        secret = st.secrets.get("COOKIE_SIGNING_KEY", "fallback-change-this")
-        decoded = base64.urlsafe_b64decode(token.encode()).decode()
+        secret   = st.secrets.get("COOKIE_SIGNING_KEY", "fallback-change-this")
+        decoded  = base64.urlsafe_b64decode(token.encode()).decode()
         email, expiry_str, sig = decoded.rsplit("|", 2)
-        payload = f"{email}|{expiry_str}"
+        payload  = f"{email}|{expiry_str}"
         expected = hmac.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(sig, expected):
             return None
@@ -120,29 +122,23 @@ def _verify_cookie(token: str):
     except Exception:
         return None
 
-# ── Cookie manager ────────────────────────────────────────────────────────────
-try:
-    import extra_streamlit_components as stx
-    _cookie_manager  = stx.CookieManager(key="auth_cookies")
-    _existing_cookie = _cookie_manager.get(COOKIE_NAME)
-except Exception:
-    _cookie_manager  = None
-    _existing_cookie = None
-
-_cookie_email = _verify_cookie(_existing_cookie) if _existing_cookie else None
+# ── Read token from URL query param ──────────────────────────────────────────
+_url_token   = st.query_params.get("t", "")
+_token_email = _verify_token(_url_token) if _url_token else None
 
 # ── Auth state init ───────────────────────────────────────────────────────────
 for _k, _v in [
-    ("auth_verified", False), ("auth_email", ""),
+    ("auth_verified", False), ("auth_email", ""), ("auth_token", ""),
     ("otp_code", ""),  ("otp_email", ""), ("otp_expiry", 0),
     ("otp_sent", False), ("otp_attempts", 0),
 ]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
-if _cookie_email and not st.session_state.auth_verified:
+if _token_email and not st.session_state.auth_verified:
     st.session_state.auth_verified = True
-    st.session_state.auth_email    = _cookie_email
+    st.session_state.auth_email    = _token_email
+    st.session_state.auth_token    = _url_token
 
 # ── Login gate ────────────────────────────────────────────────────────────────
 if not st.session_state.auth_verified:
@@ -164,10 +160,10 @@ if not st.session_state.auth_verified:
 
     _lc, _mc, _rc = st.columns([1, 2, 1])
     with _mc:
-        st.markdown("""
+        st.markdown(f"""
         <div class="auth-wrap">
           <div class="auth-logo">SEGA</div>
-          <div class="auth-title">Tweet Sentiment Tool</div>
+          <div class="auth-title">{TOOL_NAME}</div>
           <div class="auth-sub">Sign in with your SEGA America email</div>
         </div>
         """, unsafe_allow_html=True)
@@ -207,12 +203,13 @@ if not st.session_state.auth_verified:
                     _rem = 5 - st.session_state.otp_attempts
                     st.error(f"Incorrect code. {_rem} attempt{'s' if _rem != 1 else ''} remaining.")
                 else:
+                    # Success — generate signed token and put it in the URL
+                    _token = _make_token(st.session_state.otp_email)
                     st.session_state.auth_verified = True
                     st.session_state.auth_email    = st.session_state.otp_email
+                    st.session_state.auth_token    = _token
                     st.session_state.otp_code      = ""
-                    if _cookie_manager:
-                        _token = _sign_cookie(st.session_state.auth_email)
-                        _cookie_manager.set(COOKIE_NAME, _token, expires_at=None, key="set_auth_cookie")
+                    st.query_params["t"] = _token
                     st.rerun()
 
             if st.button("← Use a different email", key="auth_back"):
@@ -254,9 +251,8 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
     if st.button("Sign out", key="sign_out_btn"):
-        if _cookie_manager:
-            _cookie_manager.delete(COOKIE_NAME, key="delete_auth_cookie")
-        for _k in ["auth_verified","auth_email","otp_sent","otp_code","otp_email","otp_expiry","otp_attempts"]:
+        st.query_params.clear()
+        for _k in ["auth_verified","auth_email","auth_token","otp_sent","otp_code","otp_email","otp_expiry","otp_attempts"]:
             st.session_state[_k] = False if _k == "auth_verified" else ""
         st.rerun()
     st.markdown("<hr style='border:none;border-top:1px solid #232640;margin:.5rem 0 .75rem;'>", unsafe_allow_html=True)
@@ -299,10 +295,14 @@ with st.sidebar:
         if st.button("Create") and new_name:
             save_project({"name": new_name, "keywords": [], "handles": [], "categories": []}, OWNER)
             st.query_params["project"] = new_name
+            if st.session_state.get("auth_token"):
+                st.query_params["t"] = st.session_state.auth_token
             st.rerun()
     else:
         st.session_state["active_project"] = selected_project
         st.query_params["project"] = selected_project
+        if st.session_state.get("auth_token"):
+            st.query_params["t"] = st.session_state.auth_token
 
 # ── Load active project ───────────────────────────────────────────────────────
 active = st.session_state.get("active_project") or st.query_params.get("project", "")
@@ -1092,11 +1092,7 @@ the tutorial?"*, *"Summarise negative tweets from influencers"*, etc.
     if gen_report:
         with st.spinner("Claude is reading your data and writing the report…"):
             import anthropic
-            client = anthropic.AnthropicBedrock(
-    aws_access_key   = st.secrets.get("AWS_ACCESS_KEY_ID_API", ""),
-    aws_secret_key   = st.secrets.get("AWS_SECRET_ACCESS_KEY_API", ""),
-    aws_region       = st.secrets.get("AWS_BEDROCK_REGION", "us-east-1"),
-)
+            client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
             messages = [
                 {
                     "role": "user",
@@ -1107,7 +1103,7 @@ the tutorial?"*, *"Summarise negative tweets from influencers"*, etc.
                 }
             ]
             response = client.messages.create(
-                model="us.anthropic.claude-sonnet-4-6",
+                model="claude-sonnet-4-20250514",
                 max_tokens=4096,
                 system=SYSTEM_PROMPT,
                 messages=messages,
@@ -1180,13 +1176,9 @@ the tutorial?"*, *"Summarise negative tweets from influencers"*, etc.
 
         with st.spinner("Thinking…"):
             import anthropic
-            client = anthropic.AnthropicBedrock(
-    aws_access_key   = st.secrets.get("AWS_ACCESS_KEY_ID_API", ""),
-    aws_secret_key   = st.secrets.get("AWS_SECRET_ACCESS_KEY_API", ""),
-    aws_region       = st.secrets.get("AWS_BEDROCK_REGION", "us-east-1"),
-)
+            client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
             response = client.messages.create(
-                model="us.anthropic.claude-sonnet-4-6",
+                model="claude-sonnet-4-20250514",
                 max_tokens=2048,
                 system=SYSTEM_PROMPT,
                 messages=st.session_state[chat_key],
