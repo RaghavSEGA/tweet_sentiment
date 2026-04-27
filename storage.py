@@ -1,36 +1,48 @@
 """
-storage.py — Postgres-backed persistence for the Tweet Sentiment Tool.
+storage.py — Postgres-backed persistence for the X Sentiment Tool.
 
-Connection is via DATABASE_URL in st.secrets (a standard Postgres DSN).
-Example secrets.toml entry:
-    DATABASE_URL = "postgresql://user:password@host:5432/dbname"
+Database credentials are loaded from AWS Secrets Manager at startup.
+The ECS task role grants access — no hardcoded credentials needed.
 
-On Supabase: use the "Session mode" connection string from
-Settings → Database → Connection string → URI (port 5432).
+Secret name : soa-tools/xsentiment/db
+Secret value: {"url": "postgresql://user:password@host:5432/dbname"}
 """
 
 import json
+import os
+import boto3
 import pandas as pd
-import streamlit as st
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
+from functools import lru_cache
 
 
 # ── Connection ────────────────────────────────────────────────────────────────
 
+@lru_cache(maxsize=1)
+def _get_database_url() -> str:
+    """
+    Fetch the DATABASE_URL from Secrets Manager once and cache it.
+    Falls back to the DATABASE_URL environment variable for local development.
+    """
+    # Local dev override
+    local_url = os.environ.get("DATABASE_URL", "")
+    if local_url:
+        return local_url
+
+    client = boto3.client("secretsmanager", region_name="us-east-2")
+    resp   = client.get_secret_value(SecretId="soa-tools/xsentiment/db")
+    secret = json.loads(resp["SecretString"])
+    return secret["url"]
+
+
 @contextmanager
 def _get_conn():
-    """Yield a psycopg2 connection from the DATABASE_URL secret."""
-    url = st.secrets.get("DATABASE_URL", "")
-    if not url:
-        raise RuntimeError(
-            "DATABASE_URL not set in secrets.toml. "
-            "Add: DATABASE_URL = \"postgresql://user:pass@host:6543/db\""
-        )
+    """Yield a psycopg2 connection using the DATABASE_URL from Secrets Manager."""
+    url  = _get_database_url()
     conn = psycopg2.connect(url, sslmode="require", options="-c statement_timeout=30000")
     conn.autocommit = False
-    # Required for Supabase transaction-mode pooler (port 6543)
     psycopg2.extras.register_default_jsonb(conn)
     try:
         yield conn
@@ -78,7 +90,6 @@ def init_db():
                     PRIMARY KEY (id, owner, project)
                 )
             """)
-            # Index for fast per-user lookups
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tweets_owner_project
                 ON tweets (owner, project)

@@ -4,6 +4,10 @@ import re
 import time
 
 
+# Bedrock model ID — us-east-2
+BEDROCK_MODEL  = "anthropic.claude-sonnet-4-6"
+BEDROCK_REGION = "us-east-2"
+
 SYSTEM_PROMPT = """You are a social media sentiment analyst specializing in gaming communities.
 You will be given a batch of tweets and a list of custom categories defined by the user.
 For each tweet, return a JSON array where each element has:
@@ -35,24 +39,26 @@ Return a JSON array with one object per tweet."""
 def analyze_tweets_batch(
     tweets: list[dict],
     categories: list[dict],
-    api_key: str,
+    api_key: str = None,   # unused — kept for signature compatibility
     max_retries: int = 3,
 ) -> list[dict]:
     """
-    Send a batch of tweets to Claude for sentiment + category classification.
+    Send a batch of tweets to Claude via AWS Bedrock for sentiment + category classification.
+    Uses the ECS task role for auth — no API key needed.
     Retries up to max_retries times on connection errors with exponential backoff.
     """
     if not tweets:
         return []
 
-    client = anthropic.Anthropic(api_key=api_key)
+    # AnthropicBedrock authenticates via the ECS task role (boto3 credential chain)
+    client = anthropic.AnthropicBedrock(aws_region=BEDROCK_REGION)
     prompt = build_user_prompt(tweets, categories)
 
     last_error = None
     for attempt in range(max_retries):
         try:
             message = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=BEDROCK_MODEL,
                 max_tokens=4096,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
@@ -71,8 +77,8 @@ def analyze_tweets_batch(
                 if tid in result_map:
                     r = result_map[tid]
                     tweet["sentiment"] = r.get("sentiment", "neutral")
-                    tweet["score"] = r.get("score", 0.0)
-                    tweet["category"] = r.get("category", "Other")
+                    tweet["score"]     = r.get("score", 0.0)
+                    tweet["category"]  = r.get("category", "Other")
                     tweet["reasoning"] = r.get("reasoning", "")
                 updated.append(tweet)
 
@@ -80,12 +86,12 @@ def analyze_tweets_batch(
 
         except (anthropic.APIConnectionError, anthropic.APITimeoutError) as e:
             last_error = e
-            wait = 2 ** attempt  # 1s, 2s, 4s
+            wait = 2 ** attempt
             time.sleep(wait)
         except anthropic.RateLimitError as e:
             last_error = e
-            time.sleep(60)  # Anthropic rate limits reset quickly
+            time.sleep(30)
         except Exception as e:
-            raise  # Don't retry on unexpected errors
+            raise
 
     raise ConnectionError(f"Failed after {max_retries} attempts: {last_error}")

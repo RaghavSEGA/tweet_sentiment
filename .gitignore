@@ -1,2 +1,19 @@
+# Local database — never commit
+*.db
+sentiment_tool.db
+
+# Streamlit secrets — never commit
 .streamlit/secrets.toml
-secrets.toml.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# macOS
+.DS_Store
+
+# Dev
+.devcontainer/
+deploy-rds.ps1
